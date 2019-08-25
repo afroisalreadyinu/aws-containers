@@ -1,0 +1,22 @@
+{
+  "family": "simple-app",
+  "networkMode": "awsvpc",
+  "executionRoleArn": "$ROLEARN",
+  "containerDefinitions": [
+    {
+      "name": "simple-python-app",
+      "image": "$REPOURL:0.1",
+      "portMappings": [
+        {
+          "containerPort": 8080,
+          "hostPort": 8080,
+          "protocol": "tcp"
+        }
+      ],
+      "essential": true
+    }
+  ],
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512"
+}
