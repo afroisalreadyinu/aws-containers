@@ -33,8 +33,8 @@ aws iam attach-role-policy --role-name ecsTaskExecutionRole --policy-arn $POLICY
 
 export ROLEARN REPOURL
 envsubst < static-app/task-definition.json.tmpl > task-definition.json
-aws ecs register-task-definition --cli-input-json file://task-definition.json \
-  --tags key=Environment,value=Demo
+TASKREVISION=$(aws ecs register-task-definition --cli-input-json file://task-definition.json \
+  --tags key=Environment,value=Demo --query "taskDefinition.revision" --output text)
 
 #---- networking stuff
 
@@ -67,17 +67,25 @@ aws ec2 authorize-security-group-ingress --group-id $SECURITYGROUPID \
 
 #-----------
 
-aws ecs create-service --cluster demo-cluster --service-name simple-python-service \
-  --task-definition simple-app:2 --desired-count 1 --launch-type "FARGATE" \
+aws ecs create-service --cluster demo-cluster --service-name simple-app \
+  --task-definition simple-app:$TASKREVISION --desired-count 1 --launch-type "FARGATE" \
   --scheduling-strategy REPLICA --deployment-controller '{"type": "ECS"}'\
-  --deployment-configuration minimumHealthyPercent=100,maximumPercent=200
+  --deployment-configuration minimumHealthyPercent=100,maximumPercent=200 \
   --network-configuration "awsvpcConfiguration={subnets=[$SUBNETID],securityGroups=[$SECURITYGROUPID],assignPublicIp=\"ENABLED\"}"
+TASKARN=$(aws ecs list-tasks --cluster demo-cluster --query "taskArns[0]" --output text)
+aws ecs wait tasks-running --tasks $TASKARN --cluster demo-cluster
+PUBLICIP=$(aws ec2 describe-network-interfaces \
+  --filters "Name=subnet-id,Values=$SUBNETID" \
+  --query 'NetworkInterfaces[0].PrivateIpAddresses[0].Association.PublicIp' --output text)
 
+echo "Task now reachable at $PUBLICIP"
+echo "Checkpoint 1, press enter to continue"
+read
 
 #----------- Cleanup
 
-aws ecs update-service --service simple-python-service --cluster demo-cluster --desired-count 0
-aws ecs delete-service --service simple-python-service --cluster demo-cluster
+aws ecs update-service --service simple-app --cluster demo-cluster --desired-count 0
+aws ecs delete-service --service simple-app --cluster demo-cluster
 
 aws ecr delete-repository --repository-name simple-app --force
 aws iam detach-role-policy --role-name ecsTaskExecutionRole --policy-arn $POLICYARN
