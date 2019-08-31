@@ -72,6 +72,7 @@ aws ecs create-service --cluster demo-cluster --service-name simple-app \
   --scheduling-strategy REPLICA --deployment-controller '{"type": "ECS"}'\
   --deployment-configuration minimumHealthyPercent=100,maximumPercent=200 \
   --network-configuration "awsvpcConfiguration={subnets=[$SUBNETID],securityGroups=[$SECURITYGROUPID],assignPublicIp=\"ENABLED\"}"
+aws ecs wait services-stable --cluster demo-cluster --services simple-app
 TASKARN=$(aws ecs list-tasks --cluster demo-cluster --query "taskArns[0]" --output text)
 aws ecs wait tasks-running --tasks $TASKARN --cluster demo-cluster
 PUBLICIP=$(aws ec2 describe-network-interfaces \
@@ -86,18 +87,18 @@ read
 
 aws ecs update-service --service simple-app --cluster demo-cluster --desired-count 0
 aws ecs delete-service --service simple-app --cluster demo-cluster
+aws ecs wait services-inactive --service simple-app --cluster demo-cluster
 
 aws ecr delete-repository --repository-name simple-app --force
 aws iam detach-role-policy --role-name ecsTaskExecutionRole --policy-arn $POLICYARN
 aws iam delete-role --role-name ecsTaskExecutionRole
+aws ecs deregister-task-definition --task-definition simple-app:$TASKREVISION
+aws ecs delete-cluster --cluster demo-cluster
 
 aws ec2 detach-internet-gateway --internet-gateway-id $GATEWAYID --vpc-id $VPCID
 aws ec2 delete-internet-gateway --internet-gateway-id $GATEWAYID
 aws ec2 delete-subnet --subnet-id $SUBNETID
 aws ec2 delete-subnet --subnet-id $SUBNET2ID
 aws ec2 delete-vpc --vpc-id $VPCID
-
-aws ecs deregister-task-definition --task-definition simple-app:1
-aws ecs delete-cluster --cluster demo-cluster
 
 aws resource-groups delete-group --group-name DemoEnvironment
