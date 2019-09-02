@@ -10,16 +10,17 @@ aws resource-groups create-group \
     --name DemoEnvironment \
     --resource-query '{"Type":"TAG_FILTERS_1_0", "Query":"{\"ResourceTypeFilters\":[\"AWS::AllSupported\"],\"TagFilters\":[{\"Key\":\"Environment\", \"Values\":[\"Demo\"]}]}"}' || echo "Group exists, continuing"
 
-REPOID=$(aws ecr create-repository --repository-name simple-app \
+aws ecr create-repository --repository-name simple-app \
   --tags Key=Environment,Value=Demo \
-  --query "repository.registryId" --output text)
-REPOURL=$(aws ecr describe-repositories --repository-names simple-app \
+  --query "repository.registryId" --output text
+SIMPLEAPPREPOURL=$(aws ecr describe-repositories \
+  --repository-names simple-app \
   --query "repositories[0].repositoryUri" --output text)
 
 $(aws ecr get-login --region eu-central-1 --no-include-email)
 
-docker build -t $REPOURL:0.1 static-app/
-docker push $REPOURL:0.1
+docker build -t $SIMPLEAPPREPOURL:0.1 static-app/
+docker push $SIMPLEAPPREPOURL:0.1
 
 aws ecs create-cluster --cluster-name demo-cluster --tags key=Environment,value=Demo
 
@@ -31,7 +32,7 @@ POLICYARN=$(aws iam list-policies --query 'Policies[?PolicyName==`AmazonECSTaskE
   --output text)
 aws iam attach-role-policy --role-name ecsTaskExecutionRole --policy-arn $POLICYARN
 
-export ROLEARN REPOURL
+export ROLEARN SIMPLEAPPREPOURL
 envsubst < static-app/task-definition.json.tmpl > task-definition.json
 TASKREVISION=$(aws ecs register-task-definition --cli-input-json file://task-definition.json \
   --tags key=Environment,value=Demo --query "taskDefinition.revision" --output text)
@@ -83,6 +84,27 @@ echo "Task now reachable at $PUBLICIP"
 echo "Checkpoint 1, press enter to continue"
 read
 
+#----------- Load balancer
+
+aws ecs update-service --service simple-app --cluster demo-cluster --desired-count 0
+aws ecs delete-service --service simple-app --cluster demo-cluster
+aws ecs wait services-inactive --service simple-app --cluster demo-cluster
+
+aws ecr create-repository --repository-name hostname-app \
+  --tags Key=Environment,Value=Demo \
+  --query "repository.registryId" --output text
+HOSTNAMEAPPREPOURL=$(aws ecr describe-repositories \
+  --repository-names hostname-app \
+  --query "repositories[0].repositoryUri" --output text)
+
+docker build -t $HOSTNAMEAPPREPOURL:0.1 hostname-app/
+docker push $HOSTNAMEAPPREPOURL:0.1
+
+export HOSTNAMEAPPREPOURL
+envsubst < hostname-app/task-definition.json.tmpl > task-definition.json
+
+HNTASKREVISION=$(aws ecs register-task-definition --cli-input-json file://task-definition.json \
+  --tags key=Environment,value=Demo --query "taskDefinition.revision" --output text)
 #----------- Cleanup
 
 aws ecs update-service --service simple-app --cluster demo-cluster --desired-count 0
@@ -90,6 +112,7 @@ aws ecs delete-service --service simple-app --cluster demo-cluster
 aws ecs wait services-inactive --service simple-app --cluster demo-cluster
 
 aws ecr delete-repository --repository-name simple-app --force
+aws ecr delete-repository --repository-name hostname-app --force
 aws iam detach-role-policy --role-name ecsTaskExecutionRole --policy-arn $POLICYARN
 aws iam delete-role --role-name ecsTaskExecutionRole
 aws ecs deregister-task-definition --task-definition simple-app:$TASKREVISION
