@@ -84,11 +84,26 @@ echo "Task now reachable at $PUBLICIP"
 echo "Checkpoint 1, press enter to continue"
 read
 
-#----------- Load balancer
+#----------- Intermediate cleanup
 
 aws ecs update-service --service simple-app --cluster demo-cluster --desired-count 0
 aws ecs delete-service --service simple-app --cluster demo-cluster
 aws ecs wait services-inactive --service simple-app --cluster demo-cluster
+aws ecs deregister-task-definition --task-definition simple-app:$TASKREVISION
+aws ecr delete-repository --repository-name simple-app --force
+
+#----------- Load balancer
+
+LBARN=$(aws elbv2 create-load-balancer --tags Key=Environment,Value=Demo --name demo-balancer \
+  --type application --subnets $SUBNETID $SUBNET2ID --security-groups $SECURITYGROUPID \
+  --query "LoadBalancers[0].LoadBalancerArn" --output text)
+
+TGARN=$(aws elbv2 create-target-group --name hostname-app-tg \
+  --protocol HTTP --port 80 --target-type ip --vpc-id $VPCID \
+  --query "TargetGroups[0].TargetGroupArn" --output text)
+
+aws elbv2 create-listener --load-balancer-arn $LBARN --protocol HTTP \
+  --port 80 --default-actions Type=forward,TargetGroupArn=$TGARN
 
 aws ecr create-repository --repository-name hostname-app \
   --tags Key=Environment,Value=Demo \
@@ -105,17 +120,31 @@ envsubst < hostname-app/task-definition.json.tmpl > task-definition.json
 
 HNTASKREVISION=$(aws ecs register-task-definition --cli-input-json file://task-definition.json \
   --tags key=Environment,value=Demo --query "taskDefinition.revision" --output text)
+
+aws ecs create-service --cluster demo-cluster --service-name hostname-app-service \
+  --task-definition hostname-app:HNTASKREVISION --desired-count 1 --launch-type "FARGATE" \
+  --scheduling-strategy REPLICA --deployment-controller '{"type": "ECS"}'\
+  --deployment-configuration minimumHealthyPercent=integer,maximumPercent=200
+  --network-configuration "awsvpcConfiguration={subnets=[$SUBNETID]securityGroups=[$SECURITYGROUPID],assignPublicIp=\"ENABLED\"}" \
+  --load-balancers targetGroupArn=$TGARN,containerName=hostname-app,containerPort=8080
+
+aws ecs wait services-stable --cluster demo-cluster --services simple-app
+LBURL=$(aws elbv2 describe-load-balancers --query "LoadBalancers[0].DNSName" --output text)
+
+echo "Load balancer now reachable at $LBURL"
+echo "Checkpoint 2, press enter to continue"
+read
+
 #----------- Cleanup
 
-aws ecs update-service --service simple-app --cluster demo-cluster --desired-count 0
-aws ecs delete-service --service simple-app --cluster demo-cluster
-aws ecs wait services-inactive --service simple-app --cluster demo-cluster
+aws ecs update-service --service hostname-app --cluster demo-cluster --desired-count 0
+aws ecs delete-service --service hostname-app --cluster demo-cluster
+aws ecs wait services-inactive --service hostname-app --cluster demo-cluster
 
-aws ecr delete-repository --repository-name simple-app --force
 aws ecr delete-repository --repository-name hostname-app --force
+aws ecs deregister-task-definition --task-definition hostname-app:$HNTASKREVISION
 aws iam detach-role-policy --role-name ecsTaskExecutionRole --policy-arn $POLICYARN
 aws iam delete-role --role-name ecsTaskExecutionRole
-aws ecs deregister-task-definition --task-definition simple-app:$TASKREVISION
 aws ecs delete-cluster --cluster demo-cluster
 
 aws ec2 detach-internet-gateway --internet-gateway-id $GATEWAYID --vpc-id $VPCID
