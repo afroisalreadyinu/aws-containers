@@ -6,21 +6,11 @@ if ! [ -x "$(command -v docker)" ]; then
   exit 1
 fi
 
+ZONE=eu-central-1
+
 aws resource-groups create-group \
     --name DemoEnvironment \
     --resource-query '{"Type":"TAG_FILTERS_1_0", "Query":"{\"ResourceTypeFilters\":[\"AWS::AllSupported\"],\"TagFilters\":[{\"Key\":\"Environment\", \"Values\":[\"Demo\"]}]}"}' || echo "Group exists, continuing"
-
-aws ecr create-repository --repository-name simple-app \
-  --tags Key=Environment,Value=Demo \
-  --query "repository.registryId" --output text
-SIMPLEAPPREPOURL=$(aws ecr describe-repositories \
-  --repository-names simple-app \
-  --query "repositories[0].repositoryUri" --output text)
-
-$(aws ecr get-login --region eu-central-1 --no-include-email)
-
-docker build -t $SIMPLEAPPREPOURL:0.1 static-app/
-docker push $SIMPLEAPPREPOURL:0.1
 
 aws ecs create-cluster --cluster-name demo-cluster --tags key=Environment,value=Demo
 
@@ -32,20 +22,15 @@ POLICYARN=$(aws iam list-policies --query 'Policies[?PolicyName==`AmazonECSTaskE
   --output text)
 aws iam attach-role-policy --role-name ecsTaskExecutionRole --policy-arn $POLICYARN
 
-export ROLEARN SIMPLEAPPREPOURL
-envsubst < static-app/task-definition.json.tmpl > task-definition.json
-TASKREVISION=$(aws ecs register-task-definition --cli-input-json file://task-definition.json \
-  --tags key=Environment,value=Demo --query "taskDefinition.revision" --output text)
-
 #---- networking stuff
 
 VPCID=$(aws ec2 create-vpc --cidr-block 10.0.0.0/16 --query "Vpc.VpcId" --output text)
 aws ec2 create-tags --resources $VPCID --tags Key=Environment,Value=Demo
 SUBNETID=$(aws ec2 create-subnet --vpc-id $VPCID --cidr-block 10.0.1.0/24 \
-  --availability-zone eu-central-1b \
+  --availability-zone "${ZONE}b" \
   --query "Subnet.SubnetId" --output text)
 SUBNET2ID=$(aws ec2 create-subnet --vpc-id $VPCID --cidr-block 10.0.2.0/24 \
-  --availability-zone eu-central-1b \
+  --availability-zone "${ZONE}c" \
   --query "Subnet.SubnetId" --output text)
 aws ec2 create-tags --resources $SUBNETID --tags Key=Environment,Value=Demo
 aws ec2 create-tags --resources $SUBNET2ID --tags Key=Environment,Value=Demo
@@ -66,7 +51,24 @@ SECURITYGROUPID=$(aws ec2 describe-security-groups \
 aws ec2 authorize-security-group-ingress --group-id $SECURITYGROUPID \
   --protocol tcp --port 80 --cidr 0.0.0.0/0
 
-#-----------
+#----------- Simple app
+
+aws ecr create-repository --repository-name simple-app \
+  --tags Key=Environment,Value=Demo \
+  --query "repository.registryId" --output text
+SIMPLEAPPREPOURL=$(aws ecr describe-repositories \
+  --repository-names simple-app \
+  --query "repositories[0].repositoryUri" --output text)
+
+$(aws ecr get-login --region $ZONE --no-include-email)
+
+docker build -t $SIMPLEAPPREPOURL:0.1 static-app/
+docker push $SIMPLEAPPREPOURL:0.1
+
+export ROLEARN SIMPLEAPPREPOURL
+envsubst < static-app/task-definition.json.tmpl > task-definition.json
+TASKREVISION=$(aws ecs register-task-definition --cli-input-json file://task-definition.json \
+  --tags key=Environment,value=Demo --query "taskDefinition.revision" --output text)
 
 aws ecs create-service --cluster demo-cluster --service-name simple-app \
   --task-definition simple-app:$TASKREVISION --desired-count 1 --launch-type "FARGATE" \
@@ -111,6 +113,8 @@ aws ecr create-repository --repository-name hostname-app \
 HOSTNAMEAPPREPOURL=$(aws ecr describe-repositories \
   --repository-names hostname-app \
   --query "repositories[0].repositoryUri" --output text)
+
+$(aws ecr get-login --region $ZONE --no-include-email)
 
 docker build -t $HOSTNAMEAPPREPOURL:0.1 hostname-app/
 docker push $HOSTNAMEAPPREPOURL:0.1
