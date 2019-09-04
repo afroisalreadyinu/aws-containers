@@ -54,8 +54,8 @@ aws ec2 authorize-security-group-ingress --group-id $SECURITYGROUPID \
 #----------- Simple app
 
 aws ecr create-repository --repository-name simple-app \
-  --tags Key=Environment,Value=Demo \
-  --query "repository.registryId" --output text
+  --tags Key=Environment,Value=Demo
+
 SIMPLEAPPREPOURL=$(aws ecr describe-repositories \
   --repository-names simple-app \
   --query "repositories[0].repositoryUri" --output text)
@@ -108,8 +108,8 @@ aws elbv2 create-listener --load-balancer-arn $LBARN --protocol HTTP \
   --port 80 --default-actions Type=forward,TargetGroupArn=$TGARN
 
 aws ecr create-repository --repository-name hostname-app \
-  --tags Key=Environment,Value=Demo \
-  --query "repository.registryId" --output text
+  --tags Key=Environment,Value=Demo
+
 HOSTNAMEAPPREPOURL=$(aws ecr describe-repositories \
   --repository-names hostname-app \
   --query "repositories[0].repositoryUri" --output text)
@@ -151,6 +151,7 @@ aws iam detach-role-policy --role-name ecsTaskExecutionRole --policy-arn $POLICY
 aws iam delete-role --role-name ecsTaskExecutionRole
 aws ecs delete-cluster --cluster demo-cluster
 
+aws elbv2 delete-load-balancer --load-balancer-arn $LBARN
 aws ec2 detach-internet-gateway --internet-gateway-id $GATEWAYID --vpc-id $VPCID
 aws ec2 delete-internet-gateway --internet-gateway-id $GATEWAYID
 aws ec2 delete-subnet --subnet-id $SUBNETID
