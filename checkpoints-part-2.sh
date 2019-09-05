@@ -33,8 +33,12 @@ SUBNETID=$(aws ec2 create-subnet --vpc-id $VPCID --cidr-block 10.0.1.0/24 \
 SUBNET2ID=$(aws ec2 create-subnet --vpc-id $VPCID --cidr-block 10.0.2.0/24 \
   --availability-zone "${ZONE}c" \
   --query "Subnet.SubnetId" --output text)
+PRIVATESUBNETID=$(aws ec2 create-subnet --vpc-id $VPCID --cidr-block 10.0.3.0/24 \
+  --availability-zone "${ZONE}c" \
+  --query "Subnet.SubnetId" --output text)
 aws ec2 create-tags --resources $SUBNETID --tags Key=Environment,Value=Demo
 aws ec2 create-tags --resources $SUBNET2ID --tags Key=Environment,Value=Demo
+aws ec2 create-tags --resources $PRIVATESUBNETID --tags Key=Environment,Value=Demo
 GATEWAYID=$(aws ec2 create-internet-gateway --query "InternetGateway.InternetGatewayId" \
   --output text)
 aws ec2 create-tags --resources $GATEWAYID --tags Key=Environment,Value=Demo
@@ -132,11 +136,27 @@ envsubst < hostname-app/task-definition.json.tmpl > task-definition.json
 HNTASKREVISION=$(aws ecs register-task-definition --cli-input-json file://task-definition.json \
   --tags key=Environment,value=Demo --query "taskDefinition.revision" --output text)
 
+# This is for accessing image definitions
+ECRENDPOINTID=$(aws ec2 create-vpc-endpoint --vpc-endpoint-type "Interface" \
+  --vpc-id $VPCID --service-name "com.amazonaws.eu-central-1.ecr.dkr" \
+  --security-group-ids $SECURITYGROUPID --subnet-id $PRIVATESUBNETID \
+  --private-dns-enabled --query "VpcEndpoint.VpcEndpointId" --output text)
+
+aws ec2 create-tags --resources $ECRENDPOINTID --tags Key=Environment,Value=Demo
+
+# And this is for downloading image layers
+S3ENDPOINTID=$(aws ec2 create-vpc-endpoint --vpc-endpoint-type "Gateway"
+  --vpc-id $VPCID --service-name "com.amazonaws.eu-central-1.s3" \
+  --security-group-ids $SECURITYGROUPID --subnet-id $PRIVATESUBNETID \
+  --private-dns-enabled --query "VpcEndpoint.VpcEndpointId" --output text)
+
+aws ec2 create-tags --resources $S3ENDPOINTID --tags Key=Environment,Value=Demo
+
 aws ecs create-service --cluster demo-cluster --service-name hostname-app-service \
   --task-definition hostname-app:HNTASKREVISION --desired-count 2 --launch-type "FARGATE" \
   --scheduling-strategy REPLICA --deployment-controller '{"type": "ECS"}'\
   --deployment-configuration minimumHealthyPercent=100,maximumPercet=200
-  --network-configuration "awsvpcConfiguration={subnets=[$SUBNETID],securityGroups=[$SECURITYGROUPID],assignPublicIp=\"DISABLED\"}" \
+  --network-configuration "awsvpcConfiguration={subnets=[$PRIVATESUBNETID],securityGroups=[$SECURITYGROUPID],assignPublicIp=\"DISABLED\"}" \
   --load-balancers targetGroupArn=$TGARN,containerName=hostname-app,containerPort=8080 \
   --tags key=Environment,value=Demo
 
@@ -160,6 +180,7 @@ aws iam detach-role-policy --role-name ecsTaskExecutionRole --policy-arn $POLICY
 aws iam delete-role --role-name ecsTaskExecutionRole
 aws ecs delete-cluster --cluster demo-cluster
 
+aws ec2 delete-vpc-endpoints --vpc-endpoint-ids $ECRENDPOINTID $S3ENDPOINTID
 aws elbv2 delete-listener --listener-arn $LISTENERARN
 aws elbv2 delete-target-group --target-group-arn $TGARN
 aws elbv2 delete-load-balancer --load-balancer-arn $LBARN
@@ -169,6 +190,7 @@ aws ec2 detach-internet-gateway --internet-gateway-id $GATEWAYID --vpc-id $VPCID
 aws ec2 delete-internet-gateway --internet-gateway-id $GATEWAYID
 aws ec2 delete-subnet --subnet-id $SUBNETID
 aws ec2 delete-subnet --subnet-id $SUBNET2ID
+aws ec2 delete-subnet --subnet-id $PRIVATESUBNETID
 aws ec2 delete-vpc --vpc-id $VPCID
 
 aws resource-groups delete-group --group-name DemoEnvironment
