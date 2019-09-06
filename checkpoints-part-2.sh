@@ -6,7 +6,7 @@ if ! [ -x "$(command -v docker)" ]; then
   exit 1
 fi
 
-ZONE=eu-central-1
+REGION=eu-central-1
 
 aws resource-groups create-group \
     --name DemoEnvironment \
@@ -16,7 +16,7 @@ aws ecs create-cluster --cluster-name demo-cluster --tags key=Environment,value=
 
 ROLEARN=$(aws iam create-role --role-name ecsTaskExecutionRole \
   --assume-role-policy-document "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"Service\":[\"ecs-tasks.amazonaws.com\"]},\"Action\":[\"sts:AssumeRole\"]}]}" \
-  --query "Role.Arn" --output text
+  --query "Role.Arn" --output text \
   --tags Key=Environment,Value=Demo)
 
 POLICYARN=$(aws iam list-policies --query 'Policies[?PolicyName==`AmazonECSTaskExecutionRolePolicy`].{ARN:Arn}' \
@@ -28,13 +28,13 @@ aws iam attach-role-policy --role-name ecsTaskExecutionRole --policy-arn $POLICY
 VPCID=$(aws ec2 create-vpc --cidr-block 10.0.0.0/16 --query "Vpc.VpcId" --output text)
 aws ec2 create-tags --resources $VPCID --tags Key=Environment,Value=Demo
 SUBNETID=$(aws ec2 create-subnet --vpc-id $VPCID --cidr-block 10.0.1.0/24 \
-  --availability-zone "${ZONE}b" \
+  --availability-zone "${REGION}b" \
   --query "Subnet.SubnetId" --output text)
 SUBNET2ID=$(aws ec2 create-subnet --vpc-id $VPCID --cidr-block 10.0.2.0/24 \
-  --availability-zone "${ZONE}c" \
+  --availability-zone "${REGION}c" \
   --query "Subnet.SubnetId" --output text)
 PRIVATESUBNETID=$(aws ec2 create-subnet --vpc-id $VPCID --cidr-block 10.0.3.0/24 \
-  --availability-zone "${ZONE}c" \
+  --availability-zone "${REGION}c" \
   --query "Subnet.SubnetId" --output text)
 aws ec2 create-tags --resources $SUBNETID --tags Key=Environment,Value=Demo
 aws ec2 create-tags --resources $SUBNET2ID --tags Key=Environment,Value=Demo
@@ -65,7 +65,7 @@ SIMPLEAPPREPOURL=$(aws ecr describe-repositories \
   --repository-names simple-app \
   --query "repositories[0].repositoryUri" --output text)
 
-$(aws ecr get-login --region $ZONE --no-include-email)
+$(aws ecr get-login --region $REGION --no-include-email)
 
 docker build -t $SIMPLEAPPREPOURL:0.1 static-app/
 docker push $SIMPLEAPPREPOURL:0.1
@@ -75,12 +75,13 @@ envsubst < static-app/task-definition.json.tmpl > task-definition.json
 TASKREVISION=$(aws ecs register-task-definition --cli-input-json file://task-definition.json \
   --tags key=Environment,value=Demo --query "taskDefinition.revision" --output text)
 
-aws ecs create-service --cluster demo-cluster --service-name simple-app \
+aws ecs create-service --cluster demo-cluster --service-name simple-app-service \
   --task-definition simple-app:$TASKREVISION --desired-count 1 --launch-type "FARGATE" \
   --scheduling-strategy REPLICA --deployment-controller '{"type": "ECS"}'\
   --deployment-configuration minimumHealthyPercent=100,maximumPercent=200 \
   --network-configuration "awsvpcConfiguration={subnets=[$SUBNETID],securityGroups=[$SECURITYGROUPID],assignPublicIp=\"ENABLED\"}"
-aws ecs wait services-stable --cluster demo-cluster --services simple-app
+
+aws ecs wait services-stable --cluster demo-cluster --services simple-app-service
 TASKARN=$(aws ecs list-tasks --cluster demo-cluster --query "taskArns[0]" --output text)
 aws ecs wait tasks-running --tasks $TASKARN --cluster demo-cluster
 PUBLICIP=$(aws ec2 describe-network-interfaces \
@@ -93,9 +94,9 @@ read
 
 #----------- Intermediate cleanup
 
-aws ecs update-service --service simple-app --cluster demo-cluster --desired-count 0
-aws ecs delete-service --service simple-app --cluster demo-cluster
-aws ecs wait services-inactive --service simple-app --cluster demo-cluster
+aws ecs update-service --service simple-app-service --cluster demo-cluster --desired-count 0
+aws ecs delete-service --service simple-app-service --cluster demo-cluster
+aws ecs wait services-inactive --service simple-app-service --cluster demo-cluster
 aws ecs deregister-task-definition --task-definition simple-app:$TASKREVISION
 aws ecr delete-repository --repository-name simple-app --force
 
@@ -118,6 +119,8 @@ LISTENERARN=$(aws elbv2 create-listener --load-balancer-arn $LBARN --protocol HT
 
 aws elbv2 add-tags --resource-arns $TGARN --tags Key=Environment,Value=Demo
 
+#----------- Hostname app
+
 aws ecr create-repository --repository-name hostname-app \
   --tags Key=Environment,Value=Demo
 
@@ -125,7 +128,7 @@ HOSTNAMEAPPREPOURL=$(aws ecr describe-repositories \
   --repository-names hostname-app \
   --query "repositories[0].repositoryUri" --output text)
 
-$(aws ecr get-login --region $ZONE --no-include-email)
+$(aws ecr get-login --region $REGION --no-include-email)
 
 docker build -t $HOSTNAMEAPPREPOURL:0.1 hostname-app/
 docker push $HOSTNAMEAPPREPOURL:0.1
