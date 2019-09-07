@@ -7,6 +7,13 @@ if ! [ -x "$(command -v docker)" ]; then
 fi
 
 REGION=eu-central-1
+read -p "Change ECS service ARN format setting (see the blog post for details)? [y/N] " -r
+if [[ $REPLY =~ ^[Yy]$ ]]
+then
+    aws ecs put-account-setting-default --name serviceLongArnFormat --value enabled
+else
+    exit 0
+fi
 
 aws resource-groups create-group \
     --name DemoEnvironment \
@@ -139,31 +146,33 @@ envsubst < hostname-app/task-definition.json.tmpl > task-definition.json
 HNTASKREVISION=$(aws ecs register-task-definition --cli-input-json file://task-definition.json \
   --tags key=Environment,value=Demo --query "taskDefinition.revision" --output text)
 
+#----------- VPC endpoints
+
 # This is for accessing image definitions
 ECRENDPOINTID=$(aws ec2 create-vpc-endpoint --vpc-endpoint-type "Interface" \
-  --vpc-id $VPCID --service-name "com.amazonaws.eu-central-1.ecr.dkr" \
+  --vpc-id $VPCID --service-name "com.amazonaws.${REGION}.ecr.dkr" \
   --security-group-ids $SECURITYGROUPID --subnet-id $PRIVATESUBNETID \
   --private-dns-enabled --query "VpcEndpoint.VpcEndpointId" --output text)
 
 aws ec2 create-tags --resources $ECRENDPOINTID --tags Key=Environment,Value=Demo
 
 # And this is for downloading image layers
-S3ENDPOINTID=$(aws ec2 create-vpc-endpoint --vpc-endpoint-type "Gateway"
-  --vpc-id $VPCID --service-name "com.amazonaws.eu-central-1.s3" \
-  --security-group-ids $SECURITYGROUPID --subnet-id $PRIVATESUBNETID \
-  --private-dns-enabled --query "VpcEndpoint.VpcEndpointId" --output text)
+S3ENDPOINTID=$(aws ec2 create-vpc-endpoint --vpc-endpoint-type "Gateway" \
+  --vpc-id $VPCID --service-name "com.amazonaws.${REGION}.s3" \
+  --route-table-ids $ROUTETABLEID --query "VpcEndpoint.VpcEndpointId" \
+  --output text)
 
 aws ec2 create-tags --resources $S3ENDPOINTID --tags Key=Environment,Value=Demo
 
 aws ecs create-service --cluster demo-cluster --service-name hostname-app-service \
-  --task-definition hostname-app:HNTASKREVISION --desired-count 2 --launch-type "FARGATE" \
+  --task-definition hostname-app:$HNTASKREVISION --desired-count 2 --launch-type "FARGATE" \
   --scheduling-strategy REPLICA --deployment-controller '{"type": "ECS"}'\
-  --deployment-configuration minimumHealthyPercent=100,maximumPercet=200
+  --deployment-configuration minimumHealthyPercent=100,maximumPercent=200 \
   --network-configuration "awsvpcConfiguration={subnets=[$PRIVATESUBNETID],securityGroups=[$SECURITYGROUPID],assignPublicIp=\"DISABLED\"}" \
   --load-balancers targetGroupArn=$TGARN,containerName=hostname-app,containerPort=8080 \
   --tags key=Environment,value=Demo
 
-aws ecs wait services-stable --cluster demo-cluster --services simple-app
+aws ecs wait services-stable --cluster demo-cluster --services hostname-app-service
 LBURL=$(aws elbv2 describe-load-balancers --query "LoadBalancers[0].DNSName" --output text)
 
 echo "Load balancer now reachable at $LBURL"

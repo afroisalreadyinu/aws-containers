@@ -6,18 +6,13 @@ app = Flask('env-printer-app')
 PAGE = """
 <html>
   <body>
-   Environment:
-   <ul>
-    {% for key,value in environment %}
-    <li>{{ key }}: {{ value }} </li>
-    {% endfor %}
-   </ul>
+   <b>Hostname: {{ hostname }} </b>
   </body>
 </html>
 """
 
 @app.route("/")
 def index():
-    return render_template_string(PAGE, environment=os.environ.items())
+    return render_template_string(PAGE, hostname=os.environ.get('HOSTNAME', 'not available'))
 
 app.run(host='0.0.0.0', port=8080)
