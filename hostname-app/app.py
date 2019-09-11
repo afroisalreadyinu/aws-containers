@@ -1,7 +1,7 @@
 import os
 from flask import Flask, render_template_string
 
-app = Flask('env-printer-app')
+app = Flask('hostname-app')
 
 PAGE = """
 <html>
