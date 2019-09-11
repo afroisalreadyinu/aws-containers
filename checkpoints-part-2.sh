@@ -34,6 +34,11 @@ aws iam attach-role-policy --role-name ecsTaskExecutionRole --policy-arn $POLICY
 
 VPCID=$(aws ec2 create-vpc --cidr-block 10.0.0.0/16 --query "Vpc.VpcId" --output text)
 aws ec2 create-tags --resources $VPCID --tags Key=Environment,Value=Demo
+
+# We will need this later when we deploy services with DNS to our VPC
+aws ec2 modify-vpc-attribute --vpc-id $VPCID --enable-dns-hostnames
+aws ec2 modify-vpc-attribute --vpc-id $VPCID --enable-dns-support
+
 SUBNETID=$(aws ec2 create-subnet --vpc-id $VPCID --cidr-block 10.0.1.0/24 \
   --availability-zone "${REGION}b" \
   --query "Subnet.SubnetId" --output text)
@@ -120,11 +125,10 @@ TGARN=$(aws elbv2 create-target-group --name hostname-app-tg \
 
 aws elbv2 add-tags --resource-arns $TGARN --tags Key=Environment,Value=Demo
 
+# Unfortunately listeners don't support tags, so we can't tag this resource
 LISTENERARN=$(aws elbv2 create-listener --load-balancer-arn $LBARN --protocol HTTP \
   --port 80 --default-actions Type=forward,TargetGroupArn=$TGARN \
   --query "Listeners[0].ListenerArn" --output text)
-
-aws elbv2 add-tags --resource-arns $TGARN --tags Key=Environment,Value=Demo
 
 #----------- Hostname app
 
