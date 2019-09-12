@@ -48,9 +48,13 @@ SUBNET2ID=$(aws ec2 create-subnet --vpc-id $VPCID --cidr-block 10.0.2.0/24 \
 PRIVATESUBNETID=$(aws ec2 create-subnet --vpc-id $VPCID --cidr-block 10.0.3.0/24 \
   --availability-zone "${REGION}c" \
   --query "Subnet.SubnetId" --output text)
+PRIVATESUBNET2ID=$(aws ec2 create-subnet --vpc-id $VPCID --cidr-block 10.0.3.0/24 \
+  --availability-zone "${REGION}c" \
+  --query "Subnet.SubnetId" --output text)
 aws ec2 create-tags --resources $SUBNETID --tags Key=Environment,Value=Demo
 aws ec2 create-tags --resources $SUBNET2ID --tags Key=Environment,Value=Demo
 aws ec2 create-tags --resources $PRIVATESUBNETID --tags Key=Environment,Value=Demo
+aws ec2 create-tags --resources $PRIVATESUBNET2ID --tags Key=Environment,Value=Demo
 GATEWAYID=$(aws ec2 create-internet-gateway --query "InternetGateway.InternetGatewayId" \
   --output text)
 aws ec2 create-tags --resources $GATEWAYID --tags Key=Environment,Value=Demo
@@ -130,6 +134,24 @@ LISTENERARN=$(aws elbv2 create-listener --load-balancer-arn $LBARN --protocol HT
   --port 80 --default-actions Type=forward,TargetGroupArn=$TGARN \
   --query "Listeners[0].ListenerArn" --output text)
 
+#----------- VPC endpoints
+
+# This is for accessing image definitions
+ECRENDPOINTID=$(aws ec2 create-vpc-endpoint --vpc-endpoint-type "Interface" \
+  --vpc-id $VPCID --service-name "com.amazonaws.${REGION}.ecr.dkr" \
+  --security-group-ids $SECURITYGROUPID --subnet-id $PRIVATESUBNETID \
+  --private-dns-enabled --query "VpcEndpoint.VpcEndpointId" --output text)
+
+aws ec2 create-tags --resources $ECRENDPOINTID --tags Key=Environment,Value=Demo
+
+# And this is for downloading image layers
+S3ENDPOINTID=$(aws ec2 create-vpc-endpoint --vpc-endpoint-type "Gateway" \
+  --vpc-id $VPCID --service-name "com.amazonaws.${REGION}.s3" \
+  --route-table-ids $ROUTETABLEID --query "VpcEndpoint.VpcEndpointId" \
+  --output text)
+
+aws ec2 create-tags --resources $S3ENDPOINTID --tags Key=Environment,Value=Demo
+
 #----------- Hostname app
 
 aws ecr create-repository --repository-name hostname-app \
@@ -150,23 +172,6 @@ envsubst < hostname-app/task-definition.json.tmpl > task-definition.json
 HNTASKREVISION=$(aws ecs register-task-definition --cli-input-json file://task-definition.json \
   --tags key=Environment,value=Demo --query "taskDefinition.revision" --output text)
 
-#----------- VPC endpoints
-
-# This is for accessing image definitions
-ECRENDPOINTID=$(aws ec2 create-vpc-endpoint --vpc-endpoint-type "Interface" \
-  --vpc-id $VPCID --service-name "com.amazonaws.${REGION}.ecr.dkr" \
-  --security-group-ids $SECURITYGROUPID --subnet-id $PRIVATESUBNETID \
-  --private-dns-enabled --query "VpcEndpoint.VpcEndpointId" --output text)
-
-aws ec2 create-tags --resources $ECRENDPOINTID --tags Key=Environment,Value=Demo
-
-# And this is for downloading image layers
-S3ENDPOINTID=$(aws ec2 create-vpc-endpoint --vpc-endpoint-type "Gateway" \
-  --vpc-id $VPCID --service-name "com.amazonaws.${REGION}.s3" \
-  --route-table-ids $ROUTETABLEID --query "VpcEndpoint.VpcEndpointId" \
-  --output text)
-
-aws ec2 create-tags --resources $S3ENDPOINTID --tags Key=Environment,Value=Demo
 
 aws ecs create-service --cluster demo-cluster --service-name hostname-app-service \
   --task-definition hostname-app:$HNTASKREVISION --desired-count 2 --launch-type "FARGATE" \
@@ -182,6 +187,55 @@ LBURL=$(aws elbv2 describe-load-balancers --query "LoadBalancers[0].DNSName" --o
 echo "Load balancer now reachable at $LBURL"
 echo "Checkpoint 2, press enter to continue"
 read
+
+#----------- Random Quote App Load balancer
+
+RQLBARN=$(aws elbv2 create-load-balancer --tags Key=Environment,Value=Demo --name rq-balancer \
+  --type application --subnets $PRIVATESUBNETID $PRIVATESUBNET2ID --security-groups $SECURITYGROUPID \
+  --tags Key=Environment,Value=Demo \
+  --query "LoadBalancers[0].LoadBalancerArn" --output text)
+
+RQTGARN=$(aws elbv2 create-target-group --name rq-app-tg \
+  --protocol HTTP --port 80 --target-type ip --vpc-id $VPCID \
+  --query "TargetGroups[0].TargetGroupArn" --output text)
+
+aws elbv2 add-tags --resource-arns $RQTGARN --tags Key=Environment,Value=Demo
+
+RQLISTENERARN=$(aws elbv2 create-listener --load-balancer-arn $RQLBARN --protocol HTTP \
+  --port 80 --default-actions Type=forward,TargetGroupArn=$RQTGARN \
+  --query "Listeners[0].ListenerArn" --output text)
+
+
+#----------- Random quote app
+
+aws ecr create-repository --repository-name random-quote-app \
+  --tags Key=Environment,Value=Demo
+
+RQAPPREPOURL=$(aws ecr describe-repositories \
+  --repository-names random-quote-app \
+  --query "repositories[0].repositoryUri" --output text)
+
+$(aws ecr get-login --region $REGION --no-include-email)
+
+docker build -t $RQAPPREPOURL:0.1 random-quote-app/
+docker push $RQAPPREPOURL:0.1
+
+export ROLEARN HOSTNAMEAPPREPOURL
+envsubst < random-quote-app/task-definition.json.tmpl > task-definition.json
+
+RQTASKREVISION=$(aws ecs register-task-definition --cli-input-json file://task-definition.json \
+  --tags key=Environment,value=Demo --query "taskDefinition.revision" --output text)
+
+
+aws ecs create-service --cluster demo-cluster --service-name random-quote-app-service \
+  --task-definition random-quote-app:$RQTASKREVISION --desired-count 1 --launch-type "FARGATE" \
+  --scheduling-strategy REPLICA --deployment-controller '{"type": "ECS"}'\
+  --deployment-configuration minimumHealthyPercent=100,maximumPercent=200 \
+  --network-configuration "awsvpcConfiguration={subnets=[$PRIVATESUBNETID],securityGroups=[$SECURITYGROUPID],assignPublicIp=\"DISABLED\"}" \
+  --load-balancers targetGroupArn=$RQTGARN,containerName=random-quote-app,containerPort=8080 \
+  --tags key=Environment,value=Demo
+
+aws ecs wait services-stable --cluster demo-cluster --services random-quote-app-service
 
 #----------- Cleanup
 
@@ -207,6 +261,7 @@ aws ec2 delete-internet-gateway --internet-gateway-id $GATEWAYID
 aws ec2 delete-subnet --subnet-id $SUBNETID
 aws ec2 delete-subnet --subnet-id $SUBNET2ID
 aws ec2 delete-subnet --subnet-id $PRIVATESUBNETID
+aws ec2 delete-subnet --subnet-id $PRIVATESUBNET2ID
 aws ec2 delete-vpc --vpc-id $VPCID
 
 aws resource-groups delete-group --group-name DemoEnvironment
