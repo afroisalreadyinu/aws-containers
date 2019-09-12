@@ -188,24 +188,6 @@ echo "Load balancer now reachable at $LBURL"
 echo "Checkpoint 2, press enter to continue"
 read
 
-#----------- Random Quote App Load balancer
-
-RQLBARN=$(aws elbv2 create-load-balancer --tags Key=Environment,Value=Demo --name rq-balancer \
-  --type application --subnets $PRIVATESUBNETID $PRIVATESUBNET2ID --security-groups $SECURITYGROUPID \
-  --tags Key=Environment,Value=Demo \
-  --query "LoadBalancers[0].LoadBalancerArn" --output text)
-
-RQTGARN=$(aws elbv2 create-target-group --name rq-app-tg \
-  --protocol HTTP --port 80 --target-type ip --vpc-id $VPCID \
-  --query "TargetGroups[0].TargetGroupArn" --output text)
-
-aws elbv2 add-tags --resource-arns $RQTGARN --tags Key=Environment,Value=Demo
-
-RQLISTENERARN=$(aws elbv2 create-listener --load-balancer-arn $RQLBARN --protocol HTTP \
-  --port 80 --default-actions Type=forward,TargetGroupArn=$RQTGARN \
-  --query "Listeners[0].ListenerArn" --output text)
-
-
 #----------- Random quote app
 
 aws ecr create-repository --repository-name random-quote-app \
@@ -236,6 +218,16 @@ aws ecs create-service --cluster demo-cluster --service-name random-quote-app-se
   --tags key=Environment,value=Demo
 
 aws ecs wait services-stable --cluster demo-cluster --services random-quote-app-service
+
+OPERATIONID=$(aws servicediscovery create-private-dns-namespace --name "local" \
+ --vpc $VPCID --region $REGION --query "OperationId" --output text)
+
+NAMESPACEID=$(aws servicediscovery get-operation --operation-id $OPERATIONID \
+  --query "Operation.Targets[0].NAMESPACE" --output text)
+
+aws servicediscovery create-service --name random-quote \
+  --dns-config 'NamespaceId="??",DnsRecords=[{Type="A",TTL="300"}]'\
+  --health-check-custom-config FailureThreshold=1 --region $REGION
 
 #----------- Cleanup
 
