@@ -28,7 +28,7 @@ def index():
 @app.route("/random-quote/")
 def random_quote():
     try:
-        result = requests.get("http://localhost:8081/").json()
+        result = requests.get("http://random-quote.local:8080/").json()
     except:
         result = {"quote": "Service not available", "author": ""}
     return render_template_string(RANDOM_QUOTE, **result)

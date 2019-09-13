@@ -202,22 +202,8 @@ $(aws ecr get-login --region $REGION --no-include-email)
 docker build -t $RQAPPREPOURL:0.1 random-quote-app/
 docker push $RQAPPREPOURL:0.1
 
-export ROLEARN HOSTNAMEAPPREPOURL
+export ROLEARN RQAPPREPOURL
 envsubst < random-quote-app/task-definition.json.tmpl > task-definition.json
-
-RQTASKREVISION=$(aws ecs register-task-definition --cli-input-json file://task-definition.json \
-  --tags key=Environment,value=Demo --query "taskDefinition.revision" --output text)
-
-
-aws ecs create-service --cluster demo-cluster --service-name random-quote-app-service \
-  --task-definition random-quote-app:$RQTASKREVISION --desired-count 1 --launch-type "FARGATE" \
-  --scheduling-strategy REPLICA --deployment-controller '{"type": "ECS"}'\
-  --deployment-configuration minimumHealthyPercent=100,maximumPercent=200 \
-  --network-configuration "awsvpcConfiguration={subnets=[$PRIVATESUBNETID],securityGroups=[$SECURITYGROUPID],assignPublicIp=\"DISABLED\"}" \
-  --load-balancers targetGroupArn=$RQTGARN,containerName=random-quote-app,containerPort=8080 \
-  --tags key=Environment,value=Demo
-
-aws ecs wait services-stable --cluster demo-cluster --services random-quote-app-service
 
 OPERATIONID=$(aws servicediscovery create-private-dns-namespace --name "local" \
  --vpc $VPCID --region $REGION --query "OperationId" --output text)
@@ -225,11 +211,30 @@ OPERATIONID=$(aws servicediscovery create-private-dns-namespace --name "local" \
 NAMESPACEID=$(aws servicediscovery get-operation --operation-id $OPERATIONID \
   --query "Operation.Targets[0].NAMESPACE" --output text)
 
-aws servicediscovery create-service --name random-quote \
-  --dns-config 'NamespaceId="??",DnsRecords=[{Type="A",TTL="300"}]'\
-  --health-check-custom-config FailureThreshold=1 --region $REGION
+SERVICEREGISTRYARN=$(aws servicediscovery create-service --name random-quote \
+  --dns-config "NamespaceId=\"${NAMESPACEID}\",DnsRecords=[{Type=\"A\",TTL=\"300\"}]" \
+  --health-check-custom-config FailureThreshold=1 --region $REGION \
+  --query "Service.Arn" --output text)
+
+RQTASKREVISION=$(aws ecs register-task-definition --cli-input-json file://task-definition.json \
+  --tags key=Environment,value=Demo --query "taskDefinition.revision" --output text)
+
+aws ecs create-service --cluster demo-cluster --service-name random-quote-app-service \
+  --task-definition random-quote-app:$RQTASKREVISION --desired-count 1 --launch-type "FARGATE" \
+  --scheduling-strategy REPLICA --deployment-controller '{"type": "ECS"}'\
+  --deployment-configuration minimumHealthyPercent=100,maximumPercent=200 \
+  --network-configuration "awsvpcConfiguration={subnets=[$PRIVATESUBNETID],securityGroups=[$SECURITYGROUPID],assignPublicIp=\"DISABLED\"}" \
+  --service-registries registryArn=$SERVICEREGISTRYARN,containerName=random-quote-app \
+  --tags key=Environment,value=Demo
+
+aws ecs wait services-stable --cluster demo-cluster --services random-quote-app-service
+
 
 #----------- Cleanup
+aws ecs update-service --service random-quote-app-service --cluster demo-cluster --desired-count 0
+aws ecs delete-service --service random-quote-app-service --cluster demo-cluster
+# This takes some time
+aws ecs wait services-inactive --service random-quote-app-service --cluster demo-cluster
 
 aws ecs update-service --service hostname-app-service --cluster demo-cluster --desired-count 0
 aws ecs delete-service --service hostname-app-service --cluster demo-cluster
