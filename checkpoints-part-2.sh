@@ -182,7 +182,8 @@ aws ecs create-service --cluster demo-cluster --service-name hostname-app-servic
   --tags key=Environment,value=Demo
 
 aws ecs wait services-stable --cluster demo-cluster --services hostname-app-service
-LBURL=$(aws elbv2 describe-load-balancers --query "LoadBalancers[0].DNSName" --output text)
+LBURL=$(aws elbv2 describe-load-balancers --load-balancer-arns $LBARN \
+  --query "LoadBalancers[0].DNSName" --output text)
 
 echo "Load balancer now reachable at $LBURL"
 echo "Checkpoint 2, press enter to continue"
@@ -211,9 +212,12 @@ OPERATIONID=$(aws servicediscovery create-private-dns-namespace --name "local" \
 NAMESPACEID=$(aws servicediscovery get-operation --operation-id $OPERATIONID \
   --query "Operation.Targets[0].NAMESPACE" --output text)
 
-SERVICEREGISTRYARN=$(aws servicediscovery create-service --name random-quote \
+RQSERVICEID=$(aws servicediscovery create-service --name random-quote \
   --dns-config "NamespaceId=\"${NAMESPACEID}\",DnsRecords=[{Type=\"A\",TTL=\"300\"}]" \
   --health-check-custom-config FailureThreshold=1 --region $REGION \
+  --query "Service.Id" --output text)
+
+SERVICEREGISTRYARN=$(aws servicediscovery get-service --id $RQSERVICEID \
   --query "Service.Arn" --output text)
 
 RQTASKREVISION=$(aws ecs register-task-definition --cli-input-json file://task-definition.json \
@@ -229,21 +233,26 @@ aws ecs create-service --cluster demo-cluster --service-name random-quote-app-se
 
 aws ecs wait services-stable --cluster demo-cluster --services random-quote-app-service
 
-
 #----------- Cleanup
+
 aws ecs update-service --service random-quote-app-service --cluster demo-cluster --desired-count 0
 aws ecs delete-service --service random-quote-app-service --cluster demo-cluster
 # This takes some time
 aws ecs wait services-inactive --service random-quote-app-service --cluster demo-cluster
+aws servicediscovery delete-service --id $RQSERVICEID
+aws servicediscovery delete-namespace --id $NAMESPACEID
 
 aws ecs update-service --service hostname-app-service --cluster demo-cluster --desired-count 0
 aws ecs delete-service --service hostname-app-service --cluster demo-cluster
 # This takes some time
 aws ecs wait services-inactive --service hostname-app-service --cluster demo-cluster
 
+aws ecr delete-repository --repository-name random-quote-app --force
+aws ecs deregister-task-definition --task-definition random-quote-app:$RQTASKREVISION
 aws ecr delete-repository --repository-name hostname-app --force
 aws ecs deregister-task-definition --task-definition hostname-app:$HNTASKREVISION
 aws iam detach-role-policy --role-name ecsTaskExecutionRole --policy-arn $POLICYARN
+
 aws iam delete-role --role-name ecsTaskExecutionRole
 aws ecs delete-cluster --cluster demo-cluster
 
