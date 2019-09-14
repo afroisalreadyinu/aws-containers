@@ -48,13 +48,10 @@ SUBNET2ID=$(aws ec2 create-subnet --vpc-id $VPCID --cidr-block 10.0.2.0/24 \
 PRIVATESUBNETID=$(aws ec2 create-subnet --vpc-id $VPCID --cidr-block 10.0.3.0/24 \
   --availability-zone "${REGION}c" \
   --query "Subnet.SubnetId" --output text)
-PRIVATESUBNET2ID=$(aws ec2 create-subnet --vpc-id $VPCID --cidr-block 10.0.3.0/24 \
-  --availability-zone "${REGION}c" \
-  --query "Subnet.SubnetId" --output text)
 aws ec2 create-tags --resources $SUBNETID --tags Key=Environment,Value=Demo
 aws ec2 create-tags --resources $SUBNET2ID --tags Key=Environment,Value=Demo
 aws ec2 create-tags --resources $PRIVATESUBNETID --tags Key=Environment,Value=Demo
-aws ec2 create-tags --resources $PRIVATESUBNET2ID --tags Key=Environment,Value=Demo
+
 GATEWAYID=$(aws ec2 create-internet-gateway --query "InternetGateway.InternetGatewayId" \
   --output text)
 aws ec2 create-tags --resources $GATEWAYID --tags Key=Environment,Value=Demo
@@ -72,32 +69,32 @@ SECURITYGROUPID=$(aws ec2 describe-security-groups \
 aws ec2 authorize-security-group-ingress --group-id $SECURITYGROUPID \
   --protocol tcp --port 80 --cidr 0.0.0.0/0
 
-#----------- Simple app
+#----------- Static app
 
-aws ecr create-repository --repository-name simple-app \
+aws ecr create-repository --repository-name static-app \
   --tags Key=Environment,Value=Demo
 
-SIMPLEAPPREPOURL=$(aws ecr describe-repositories \
-  --repository-names simple-app \
+STATICAPPREPOURL=$(aws ecr describe-repositories \
+  --repository-names static-app \
   --query "repositories[0].repositoryUri" --output text)
 
 $(aws ecr get-login --region $REGION --no-include-email)
 
-docker build -t $SIMPLEAPPREPOURL:0.1 static-app/
-docker push $SIMPLEAPPREPOURL:0.1
+docker build -t $STATICAPPREPOURL:0.1 static-app/
+docker push $STATICAPPREPOURL:0.1
 
-export ROLEARN SIMPLEAPPREPOURL
+export ROLEARN STATICAPPREPOURL
 envsubst < static-app/task-definition.json.tmpl > task-definition.json
 TASKREVISION=$(aws ecs register-task-definition --cli-input-json file://task-definition.json \
   --tags key=Environment,value=Demo --query "taskDefinition.revision" --output text)
 
-aws ecs create-service --cluster demo-cluster --service-name simple-app-service \
-  --task-definition simple-app:$TASKREVISION --desired-count 1 --launch-type "FARGATE" \
+aws ecs create-service --cluster demo-cluster --service-name static-app-service \
+  --task-definition static-app:$TASKREVISION --desired-count 1 --launch-type "FARGATE" \
   --scheduling-strategy REPLICA --deployment-controller '{"type": "ECS"}'\
   --deployment-configuration minimumHealthyPercent=100,maximumPercent=200 \
   --network-configuration "awsvpcConfiguration={subnets=[$SUBNETID],securityGroups=[$SECURITYGROUPID],assignPublicIp=\"ENABLED\"}"
 
-aws ecs wait services-stable --cluster demo-cluster --services simple-app-service
+aws ecs wait services-stable --cluster demo-cluster --services static-app-service
 TASKARN=$(aws ecs list-tasks --cluster demo-cluster --query "taskArns[0]" --output text)
 aws ecs wait tasks-running --tasks $TASKARN --cluster demo-cluster
 PUBLICIP=$(aws ec2 describe-network-interfaces \
@@ -110,11 +107,11 @@ read
 
 #----------- Intermediate cleanup
 
-aws ecs update-service --service simple-app-service --cluster demo-cluster --desired-count 0
-aws ecs delete-service --service simple-app-service --cluster demo-cluster
-aws ecs wait services-inactive --service simple-app-service --cluster demo-cluster
-aws ecs deregister-task-definition --task-definition simple-app:$TASKREVISION
-aws ecr delete-repository --repository-name simple-app --force
+aws ecs update-service --service static-app-service --cluster demo-cluster --desired-count 0
+aws ecs delete-service --service static-app-service --cluster demo-cluster
+aws ecs wait services-inactive --service static-app-service --cluster demo-cluster
+aws ecs deregister-task-definition --task-definition static-app:$TASKREVISION
+aws ecr delete-repository --repository-name static-app --force
 
 #----------- Load balancer
 
@@ -267,7 +264,6 @@ aws ec2 delete-internet-gateway --internet-gateway-id $GATEWAYID
 aws ec2 delete-subnet --subnet-id $SUBNETID
 aws ec2 delete-subnet --subnet-id $SUBNET2ID
 aws ec2 delete-subnet --subnet-id $PRIVATESUBNETID
-aws ec2 delete-subnet --subnet-id $PRIVATESUBNET2ID
 aws ec2 delete-vpc --vpc-id $VPCID
 
 aws resource-groups delete-group --group-name DemoEnvironment

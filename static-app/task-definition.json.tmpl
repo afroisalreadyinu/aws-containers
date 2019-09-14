@@ -1,11 +1,11 @@
 {
-  "family": "simple-app",
+  "family": "static-app",
   "networkMode": "awsvpc",
   "executionRoleArn": "$ROLEARN",
   "containerDefinitions": [
     {
-      "name": "simple-python-app",
-      "image": "$SIMPLEAPPREPOURL:0.1",
+      "name": "static-app",
+      "image": "$STATICAPPREPOURL:0.1",
       "portMappings": [
         {
           "containerPort": 8080,
