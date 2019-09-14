@@ -57,8 +57,9 @@ GATEWAYID=$(aws ec2 create-internet-gateway --query "InternetGateway.InternetGat
 aws ec2 create-tags --resources $GATEWAYID --tags Key=Environment,Value=Demo
 aws ec2 attach-internet-gateway --vpc-id $VPCID --internet-gateway-id $GATEWAYID
 
-ROUTETABLEID=$(aws ec2 describe-route-tables --filter "Name=vpc-id,Values=$VPCID" \
-  --query "RouteTables[0].RouteTableId" --output text)
+ROUTETABLEID=$(aws ec2 create-route-table --vpc-id $VPCID \
+  --query "RouteTable.RouteTableId" --output text)
+aws ec2 create-tags --resources $ROUTETABLEID --tags Key=Environment,Value=Demo
 aws ec2 create-route --route-table-id $ROUTETABLEID --destination-cidr-block 0.0.0.0/0 \
   --gateway-id $GATEWAYID
 aws ec2 associate-route-table  --subnet-id $SUBNETID --route-table-id $ROUTETABLEID
@@ -95,6 +96,7 @@ aws ecs create-service --cluster demo-cluster --service-name static-app-service 
   --network-configuration "awsvpcConfiguration={subnets=[$SUBNETID],securityGroups=[$SECURITYGROUPID],assignPublicIp=\"ENABLED\"}"
 
 aws ecs wait services-stable --cluster demo-cluster --services static-app-service
+
 TASKARN=$(aws ecs list-tasks --cluster demo-cluster --query "taskArns[0]" --output text)
 aws ecs wait tasks-running --tasks $TASKARN --cluster demo-cluster
 PUBLICIP=$(aws ec2 describe-network-interfaces \
