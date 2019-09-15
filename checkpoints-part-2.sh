@@ -57,6 +57,9 @@ GATEWAYID=$(aws ec2 create-internet-gateway --query "InternetGateway.InternetGat
 aws ec2 create-tags --resources $GATEWAYID --tags Key=Environment,Value=Demo
 aws ec2 attach-internet-gateway --vpc-id $VPCID --internet-gateway-id $GATEWAYID
 
+DEFAULTRTID=$(aws ec2 describe-route-tables --filter "Name=vpc-id,Values=$VPCID" \
+  --query "RouteTables[0].RouteTableId" --output text)
+
 ROUTETABLEID=$(aws ec2 create-route-table --vpc-id $VPCID \
   --query "RouteTable.RouteTableId" --output text)
 aws ec2 create-tags --resources $ROUTETABLEID --tags Key=Environment,Value=Demo
@@ -146,10 +149,22 @@ aws ec2 create-tags --resources $ECRENDPOINTID --tags Key=Environment,Value=Demo
 # And this is for downloading image layers
 S3ENDPOINTID=$(aws ec2 create-vpc-endpoint --vpc-endpoint-type "Gateway" \
   --vpc-id $VPCID --service-name "com.amazonaws.${REGION}.s3" \
-  --route-table-ids $ROUTETABLEID --query "VpcEndpoint.VpcEndpointId" \
+  --route-table-ids $DEFAULTRTID --query "VpcEndpoint.VpcEndpointId" \
   --output text)
 
 aws ec2 create-tags --resources $S3ENDPOINTID --tags Key=Environment,Value=Demo
+
+#----------- Internal security group
+
+PRIVATESECURITYGROUPID=$(aws ec2 create-security-group \
+  --group-name private-security-group --description "Internal SG" \
+  --vpc-id $VPCID --query "GroupId" --output text)
+
+aws ec2 authorize-security-group-ingress --group-id $PRIVATESECURITYGROUPID \
+  --protocol tcp --port 0-65535 --cidr 10.0.0.0/16
+
+aws ec2 authorize-security-group-egress --group-id $PRIVATESECURITYGROUPID \
+  --protocol tcp --port 0-65535 --cidr 10.0.0.0/16
 
 #----------- Hostname app
 
@@ -176,7 +191,7 @@ aws ecs create-service --cluster demo-cluster --service-name hostname-app-servic
   --task-definition hostname-app:$HNTASKREVISION --desired-count 2 --launch-type "FARGATE" \
   --scheduling-strategy REPLICA --deployment-controller '{"type": "ECS"}'\
   --deployment-configuration minimumHealthyPercent=100,maximumPercent=200 \
-  --network-configuration "awsvpcConfiguration={subnets=[$PRIVATESUBNETID],securityGroups=[$SECURITYGROUPID],assignPublicIp=\"DISABLED\"}" \
+  --network-configuration "awsvpcConfiguration={subnets=[$PRIVATESUBNETID],securityGroups=[$PRIVATESECURITYGROUPID],assignPublicIp=\"DISABLED\"}" \
   --load-balancers targetGroupArn=$TGARN,containerName=hostname-app,containerPort=8080 \
   --tags key=Environment,value=Demo
 
