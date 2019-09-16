@@ -186,7 +186,6 @@ envsubst < hostname-app/task-definition.json.tmpl > task-definition.json
 HNTASKREVISION=$(aws ecs register-task-definition --cli-input-json file://task-definition.json \
   --tags key=Environment,value=Demo --query "taskDefinition.revision" --output text)
 
-
 aws ecs create-service --cluster demo-cluster --service-name hostname-app-service \
   --task-definition hostname-app:$HNTASKREVISION --desired-count 2 --launch-type "FARGATE" \
   --scheduling-strategy REPLICA --deployment-controller '{"type": "ECS"}'\
@@ -278,6 +277,7 @@ aws elbv2 delete-load-balancer --load-balancer-arn $LBARN
 aws elbv2 wait load-balancers-deleted --load-balancer-arn $LBARN
 aws ec2 detach-internet-gateway --internet-gateway-id $GATEWAYID --vpc-id $VPCID
 aws ec2 delete-internet-gateway --internet-gateway-id $GATEWAYID
+aws ec2 delete-route-table --route-table-id $ROUTETABLEID
 aws ec2 delete-subnet --subnet-id $SUBNETID
 aws ec2 delete-subnet --subnet-id $SUBNET2ID
 aws ec2 delete-subnet --subnet-id $PRIVATESUBNETID
