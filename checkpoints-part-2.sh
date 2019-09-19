@@ -139,7 +139,7 @@ LISTENERARN=$(aws elbv2 create-listener --load-balancer-arn $LBARN --protocol HT
 #----------- Internal security group
 
 PRIVATESECURITYGROUPID=$(aws ec2 create-security-group \
-  --group-name private-security-group --description "Internal SG" \
+  --group-name private-security-group --description "Private SG" \
   --vpc-id $VPCID --query "GroupId" --output text)
 
 aws ec2 authorize-security-group-ingress --group-id $PRIVATESECURITYGROUPID \
@@ -147,6 +147,15 @@ aws ec2 authorize-security-group-ingress --group-id $PRIVATESECURITYGROUPID \
 
 aws ec2 authorize-security-group-egress --group-id $PRIVATESECURITYGROUPID \
   --protocol tcp --port 0-65535 --cidr 10.0.0.0/16
+
+# This is the crazy part
+S3PREFIXLISTID=$(aws ec2 describe-prefix-lists --region $REGION \
+  --query "PrefixLists[?PrefixListName == 'com.amazonaws.${REGION}.s3'].PrefixListId" \
+  --output text)
+
+aws ec2 authorize-security-group-egress --group-id $PRIVATESECURITYGROUPID \
+    --ip-permissions IpProtocol=tcp,FromPort=0,ToPort=65535,PrefixListIds="[{Description=\"Why isnt this in the docs\",PrefixListId=${S3PREFIXLISTID}}]"
+
 
 #----------- VPC endpoints
 
@@ -159,8 +168,11 @@ ENDPOINTSECURITYGROUPID=$(aws ec2 create-security-group \
 aws ec2 authorize-security-group-ingress --group-id $ENDPOINTSECURITYGROUPID \
   --protocol tcp --port 0-65535 --source-group $PRIVATESECURITYGROUPID
 
-aws ec2 authorize-security-group-egress --group-id $ENDPOINTSECURITYGROUPID \
-  --protocol tcp --port 0-65535 --source-group $PRIVATESECURITYGROUPID
+aws ec2 authorize-security-group-ingress --group-id $ENDPOINTSECURITYGROUPID \
+  --protocol tcp --port 0-65535 --cidr 10.0.3.0/24
+
+aws ec2 authorize-security-group-egress --group-id $PRIVATESECURITYGROUPID \
+  --protocol tcp --port 0-65535 --source-group $ENDPOINTSECURITYGROUPID
 
 # This is for accessing image definitions
 ECRENDPOINTID=$(aws ec2 create-vpc-endpoint --vpc-endpoint-type "Interface" \
